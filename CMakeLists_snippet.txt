@@ -1,0 +1,23 @@
+# Add to your CMakeLists.txt
+
+find_package(OpenCV REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(rclcpp REQUIRED)
+
+add_executable(delayed_mask_fusion_node src/delayed_mask_fusion_node.cpp)
+target_compile_features(delayed_mask_fusion_node PUBLIC cxx_std_17)
+
+ament_target_dependencies(
+  delayed_mask_fusion_node
+  rclcpp
+  sensor_msgs
+  cv_bridge
+)
+
+target_include_directories(delayed_mask_fusion_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(delayed_mask_fusion_node ${OpenCV_LIBRARIES})
+
+install(TARGETS delayed_mask_fusion_node
+  DESTINATION lib/${PROJECT_NAME}
+)

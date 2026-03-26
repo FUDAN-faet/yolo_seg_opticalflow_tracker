@@ -1,0 +1,5 @@
+<!-- Add these dependencies to package.xml -->
+<depend>rclcpp</depend>
+<depend>sensor_msgs</depend>
+<depend>cv_bridge</depend>
+<depend>opencv</depend>
