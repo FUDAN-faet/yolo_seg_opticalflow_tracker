@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>yolo_seg_opticalflow_tracker</name>
+  <version>0.1.0</version>
+  <description>ROS 2 C++ package that runs YOLO segmentation for mask extraction and optical-flow-based mask catch-up tracking.</description>
+  <maintainer email="openai@example.com">OpenAI</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>builtin_interfaces</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>opencv</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
