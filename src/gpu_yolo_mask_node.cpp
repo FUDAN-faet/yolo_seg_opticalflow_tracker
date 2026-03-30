@@ -24,7 +24,7 @@
 // - ONNX Runtime 负责真正的 ONNX 推理，并优先调度 CUDAExecutionProvider
 // - rclcpp / sensor_msgs / std_msgs 是 ROS 2 节点和消息定义
 #include <builtin_interfaces/msg/time.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 #include <onnxruntime/core/session/onnxruntime_cxx_api.h>
@@ -148,7 +148,10 @@ public:
     declare_parameter<double>("hand_roi_y_max", 1.0);
     declare_parameter<bool>("gpu_warmup", true);
     declare_parameter<bool>("publish_visualization", true);
-    declare_parameter<bool>("crop_mask_to_box", false);
+    // Ultralytics 的 result.masks 本质上是实例级 mask，
+    // 后处理里已经按检测框做过裁剪。
+    // 这里默认打开同样的行为，避免 proto 组合后在整张图上出现大面积“串色”。
+    declare_parameter<bool>("crop_mask_to_box", true);
     declare_parameter<int>("min_inference_interval_ms", 0);
     declare_parameter<int>("log_every_n_frames", 30);
 
@@ -196,6 +199,18 @@ public:
 
     // 初始化 ONNX Runtime 会话和推理后端。
     initSession();
+
+    // 如果推理后端没有成功就绪，就不要继续启动工作线程，
+    // 也不要打印“Started”，避免把初始化失败误显示成正常启动。
+    if (!net_ready_) {
+      backend_name_ = "init_failed";
+      RCLCPP_ERROR(
+        get_logger(),
+        "YOLO node initialization failed. model=%s backend=%s",
+        model_path_.c_str(),
+        backend_name_.c_str());
+      return;
+    }
 
     // 单独起一条工作线程做推理，避免 ROS 回调线程直接被前向推理阻塞。
     worker_thread_ = std::thread(&GpuYoloMaskNode::workerLoop, this);
@@ -271,14 +286,15 @@ private:
       bool cuda_enabled = false;
       if (use_gpu_) {
         try {
-          Ort::CUDAProviderOptions cuda_options;
-          cuda_options.Update({
-            {"device_id", "0"},
-            {"do_copy_in_default_stream", "1"},
-            {"use_tf32", "1"},
-            {"cudnn_conv_algo_search", "HEURISTIC"}});
-          session_options_.AppendExecutionProvider_CUDA_V2(cuda_options);
-          backend_name_ = "onnxruntime_cuda";
+          // 这里改用旧版的公开 C 结构体而不是 V2 的字符串 Update 接口。
+          // 之前的 V2 路径在你的环境里会在解析 "device_id" 时触发 cudaGetDeviceCount()
+          // 并直接报 CUDA 999，导致 provider 还没真正挂上就回退到 CPU。
+          // 这一版直接填字段，先把字符串解析这一层不稳定因素拿掉。
+          OrtCUDAProviderOptions cuda_options;
+          cuda_options.device_id = 0;
+          cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
+          cuda_options.do_copy_in_default_stream = 1;
+          session_options_.AppendExecutionProvider_CUDA(cuda_options);
           cuda_enabled = true;
         } catch (const Ort::Exception & e) {
           RCLCPP_WARN(
@@ -288,8 +304,8 @@ private:
         }
       }
 
-      // 无论是否启用 GPU，都追加 CPU 作为兜底 provider。
-      session_options_.AppendExecutionProvider_CPU(1);
+      // 这套 ORT 头文件里 CPU provider 的 C++ 包装不可用，
+      // 这里直接依赖 ORT 默认自带的 CPU EP 作为兜底。
       if (!cuda_enabled) {
         backend_name_ = "onnxruntime_cpu";
       }
@@ -338,11 +354,18 @@ private:
         }
       }
 
+      // 只有 Session 真正创建成功后，才把后端名定下来。
+      if (cuda_enabled) {
+        backend_name_ = "onnxruntime_cuda";
+      }
+
       net_ready_ = true;
     } catch (const Ort::Exception & e) {
+      backend_name_ = "init_failed";
       RCLCPP_ERROR(get_logger(), "Failed to initialize ONNX Runtime session: %s", e.what());
       return;
     } catch (const std::exception & e) {
+      backend_name_ = "init_failed";
       RCLCPP_ERROR(get_logger(), "Failed to initialize ONNX Runtime session: %s", e.what());
       return;
     }
@@ -842,15 +865,17 @@ private:
     cv::threshold(mask_roi, mask_binary, mask_prob_threshold_, 255.0, cv::THRESH_BINARY);
     mask_binary.convertTo(mask_binary, CV_8UC1);
 
-    // 如果配置为只保留检测框内区域，就再用 box 做一次裁剪。
+    // Ultralytics 的分割后处理会把实例 mask 限制在检测框内。
+    // 如果不做这一步，proto 线性组合很容易在目标外的区域激活，
+    // 看起来就像“框是对的，但整幅图被错误涂绿了”。
     if (crop_mask_to_box_) {
-      cv::Mat bbox_mask = cv::Mat::zeros(prep.roi_size, CV_8UC1);
+      cv::Mat cropped = cv::Mat::zeros(mask_binary.size(), mask_binary.type());
       const cv::Rect clipped_box =
         detection.box & cv::Rect(0, 0, prep.roi_size.width, prep.roi_size.height);
       if (clipped_box.area() > 0) {
-        bbox_mask(clipped_box).setTo(255);
+        mask_binary(clipped_box).copyTo(cropped(clipped_box));
       }
-      cv::bitwise_and(mask_binary, bbox_mask, mask_binary);
+      mask_binary = std::move(cropped);
     }
 
     // 如果没有启用 ROI，当前 mask 就已经是整图尺寸。

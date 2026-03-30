@@ -20,7 +20,8 @@
 // - MultiThreadedExecutor 让 color / depth / yolo 回调可以并发执行
 // - sensor_msgs::msg::Image / std_msgs::msg::Header 是我们使用的消息类型
 #include <builtin_interfaces/msg/time.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.hpp>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
 #include <rclcpp/executors/multi_threaded_executor.hpp>
